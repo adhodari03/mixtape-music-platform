@@ -183,9 +183,24 @@ def test_bug4_no_notification_on_rating(app):
         rate_song(rater.id, song.id, score=5)
 
         notifications = get_notifications(sharer.id)
-        # BUG: notifications == [] because rate_song never calls create_notification
-        assert len(notifications) == 0, (
-            f"BUG CONFIRMED: sharer received {len(notifications)} notification(s) — expected 0 (bug present)"
+        # Fixed: sharer now receives a notification when their song is rated
+        assert len(notifications) == 1, (
+            f"FIXED: sharer received {len(notifications)} notification(s), expected 1"
+        )
+        assert notifications[0]["type"] == "song_rated"
+
+        # Re-rating also notifies (every submission)
+        rate_song(rater.id, song.id, score=3)
+        notifications = get_notifications(sharer.id)
+        assert len(notifications) == 2, (
+            f"FIXED: re-rating also notifies — got {len(notifications)}, expected 2"
+        )
+
+        # Sharer rating their own song does NOT notify
+        rate_song(sharer.id, song.id, score=4)
+        notifications = get_notifications(sharer.id)
+        assert len(notifications) == 2, (
+            "FIXED: self-rating produces no extra notification"
         )
 
 

@@ -85,24 +85,21 @@ Removed the `.outerjoin(song_tags, ...)` line entirely and cleaned up the now-un
 
 ---
 
-### Bug 4 — No notification when a song is rated (`notification_service.py:73`)
+### Bug 4 — Got notified when a friend added my song to a playlist but not when they rated it (`notification_service.py`)
 
-**Root cause:** `rate_song()` saves the `Rating` and commits, but never calls `create_notification()`. The parallel code path `add_to_playlist()` does notify correctly — `rate_song()` is simply missing the equivalent block.
+**Issue:** Rating a song produces no notification for the person who shared it, even though adding that same song to a playlist does.
 
-```python
-def rate_song(user_id, song_id, score):
-    ...
-    db.session.commit()
-    return rating          # ← no create_notification() call here
-```
+**How I reproduced it:**
+I called `rate_song(rater.id, song.id, 5)` in a test context where `rater` and `sharer` are two different users, then queried `get_notifications(sharer.id)`. The result was an empty list. I then called `add_to_playlist()` in the same conditions and confirmed it does produce a notification — proving the omission is specific to `rate_song`, not a general notification system failure.
 
-**How to reproduce:**
-1. User A shares a song.
-2. User B calls `rate_song(B.id, song.id, 5)`.
-3. Query `get_notifications(A.id)` → empty list.
-4. Expected: a `song_rated` notification for User A.
+**How I found the root cause:**
+I read `notification_service.py` top to bottom. `add_to_playlist()` explicitly calls `create_notification()` after committing the playlist change. `rate_song()` commits the `Rating` and immediately `return`s the rating object — there is no `create_notification()` call anywhere in the function. The missing call was the entire problem; no other logic was involved.
 
-**Test:** `test_bug4_no_notification_on_rating` — asserts `len(notifications) == 0` to confirm no notification was created.
+**Root cause:**
+`rate_song()` in `notification_service.py` was simply never wired up to send a notification. After `db.session.commit()`, the function returned the `Rating` directly. The `create_notification()` helper exists and works — `add_to_playlist()` in the same file uses it correctly — but whoever wrote `rate_song()` left that step out. Because `rate_song()` already has both the `song` object (which carries `song.shared_by`) and the `rater` object (which carries `rater.username`), everything needed to construct the notification message was already in scope.
+
+**Fix and side-effect check:**
+Added a `create_notification()` call after `db.session.commit()`, guarded by `song.shared_by != user_id` so a user rating their own shared song does not notify themselves — matching the same guard used in `add_to_playlist()`. The notification fires on every rating submission including re-rates, per the confirmed intended behaviour. The reproduction test covers three scenarios: first rating notifies, re-rating notifies again, and self-rating produces no notification. All other tests remain green.
 
 ---
 
