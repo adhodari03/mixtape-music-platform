@@ -103,17 +103,18 @@ Added a `create_notification()` call after `db.session.commit()`, guarded by `so
 
 ---
 
-### Bug 5 — Last playlist song silently dropped (`playlist_service.py:66`)
+### Bug 5 — The last song in a playlist never shows up (`playlist_service.py`)
 
-**Root cause:** An off-by-one Python slice on the query result:
-```python
-return [song.to_dict() for song in songs[:-1]]
-```
-`songs[:-1]` excludes the last element of the list. For a 5-song playlist ordered by position, Track 5 is always missing. For a 1-song playlist, the result is always empty.
+**Issue:** No matter how many songs a playlist contains, the last one is always missing from the returned list.
 
-**How to reproduce:**
-1. Create a playlist with 5 songs at positions 1–5.
-2. Call `get_playlist_songs(playlist.id)`.
-3. Result contains 4 songs: Track 1–4. Track 5 (position=5) is gone.
+**How I reproduced it:**
+I created a playlist with 5 songs at positions 1–5 and called `get_playlist_songs()`. The result contained only 4 songs — Track 5 was absent. I then tested with a 1-song playlist and got an empty list back, which confirmed the drop is always from the tail regardless of playlist size. The reproduction test `test_bug5_last_song_missing_from_playlist` pins the 5-song case.
 
-**Test:** `test_bug5_last_song_missing_from_playlist` — asserts `"Track 5" not in titles` and `len(result) == 4` to confirm the drop.
+**How I found the root cause:**
+I opened `services/playlist_service.py` and read `get_playlist_songs()`. The SQL query itself is correct — it joins `playlist_entries`, filters by `playlist_id`, and orders by `position` ascending. I then looked at the return statement on line 66: `return [song.to_dict() for song in songs[:-1]]`. The `[:-1]` Python slice was the entire problem. There was nothing else to look at — the query was fine, the data was all there, and a single slice was throwing the last element away before it could be returned.
+
+**Root cause:**
+Python's `list[:-1]` slice returns all elements except the last one. `songs` is a correctly ordered, complete list of every song in the playlist as returned by SQLAlchemy. Applying `[:-1]` before the list comprehension unconditionally discards the song at the highest position — Track 5 in a 5-song playlist, Track 1 in a 1-song playlist (leaving an empty list). There is no valid reason for this slice to exist; the docstring even says "This function returns all songs in the playlist."
+
+**Fix and side-effect check:**
+Removed `[:-1]`, changing the return to `[song.to_dict() for song in songs]`. All 3 playlist tests now pass, including the previously failing `test_playlist_returns_all_songs` and `test_playlist_returns_songs_in_order`. The empty-playlist case still returns `[]` correctly because iterating an empty list produces an empty list. `get_playlist_songs` is called in one other place — `notification_service.add_to_playlist()` — which uses it only to check membership before appending; that logic is unaffected by returning the full list.

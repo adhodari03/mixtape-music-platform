@@ -247,8 +247,8 @@ def test_bug5_last_song_missing_from_playlist(app):
         result = get_playlist_songs(playlist.id)
         titles = [s["title"] for s in result]
 
-        # BUG: returns ["Track 1", "Track 2", "Track 3", "Track 4"]
-        assert "Track 5" not in titles, (
-            "BUG CONFIRMED: 'Track 5' (last song) is missing from playlist results"
+        # Fixed: all 5 songs are returned in order
+        assert len(result) == 5, f"FIXED: got {len(result)} songs, expected 5"
+        assert titles == ["Track 1", "Track 2", "Track 3", "Track 4", "Track 5"], (
+            "FIXED: all songs returned in position order including the last one"
         )
-        assert len(result) == 4, f"BUG CONFIRMED: got {len(result)} songs instead of 5"
