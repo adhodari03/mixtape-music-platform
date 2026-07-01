@@ -59,8 +59,8 @@ def test_bug1_streak_resets_on_sunday(app):
         assert user.listening_streak == 1, "Streak should start at 1 after Saturday"
 
         update_listening_streak(user, sunday)
-        # BUG: returns 1 (reset) instead of 2 (increment)
-        assert user.listening_streak == 1, "BUG CONFIRMED: Sunday reset streak to 1 instead of 2"
+        # Fixed: Sunday consecutive listen now correctly increments the streak
+        assert user.listening_streak == 2, "FIXED: Sunday streak increments to 2 instead of resetting to 1"
 
 
 # ---------------------------------------------------------------------------
