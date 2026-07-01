@@ -136,3 +136,7 @@ Python's `list[:-1]` slice returns all elements except the last one. `songs` is 
 
 **Fix and side-effect check:**
 Removed `[:-1]`, changing the return to `[song.to_dict() for song in songs]`. All 3 playlist tests now pass, including the previously failing `test_playlist_returns_all_songs` and `test_playlist_returns_songs_in_order`. The empty-playlist case still returns `[]` correctly because iterating an empty list produces an empty list. `get_playlist_songs` is called in one other place — `notification_service.add_to_playlist()` — which uses it only to check membership before appending; that logic is unaffected by returning the full list.
+### Screenshot
+![git commits](image.png)
+
+
