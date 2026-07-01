@@ -122,24 +122,12 @@ def test_bug2_feed_excludes_yesterday_listeners(app):
 # .all() returns them once per row from the result set, creating duplicates.
 # ---------------------------------------------------------------------------
 
-def test_bug3_search_duplicate_sql_rows(app):
+def test_bug3_search_no_duplicates_after_fix(app):
     """
-    BUG 3 — The outerjoin on song_tags without DISTINCT produces one SQL row
-    per (song, tag) pair. SQLAlchemy 2.0's session identity map collapses
-    these back to one ORM object, so user-visible duplicates are masked in
-    the current setup. However the underlying query is wrong: N tags → N rows
-    at the database level, making the query unnecessarily expensive and fragile
-    (e.g. it WILL produce duplicates when used outside of a session context
-    or if the query is ever rewritten with select() instead of session.query()).
-
-    Reproduction (structural, via raw SQL):
-      1. Create a song with 3 tags.
-      2. Run the same LEFT JOIN the service uses directly in SQL.
-      3. Confirm 3 rows come back — one per tag.
-      4. Confirm ORM collapses to 1 (the masked state today).
+    BUG 3 (fixed) — Removing the outerjoin on song_tags means the query
+    now produces exactly one SQL row per song regardless of tag count.
+    Tags are still returned correctly via Song.tags (lazy='subquery').
     """
-    from sqlalchemy import text
-
     with app.app_context():
         user = User(username="u3", email="u3@test.com")
         db.session.add(user)
@@ -157,20 +145,10 @@ def test_bug3_search_duplicate_sql_rows(app):
             db.session.execute(song_tags.insert().values(song_id=song.id, tag_id=tag.id))
         db.session.commit()
 
-        # Raw SQL confirms 3 duplicate rows at the database level
-        raw_rows = db.session.execute(text(
-            "SELECT song.id, song.title, song_tags.tag_id "
-            "FROM song LEFT OUTER JOIN song_tags ON song.id = song_tags.song_id "
-            "WHERE song.title LIKE '%Triple%'"
-        )).fetchall()
-        assert len(raw_rows) == 3, (
-            "BUG CONFIRMED (structural): outerjoin produces 3 SQL rows for 1 song with 3 tags"
-        )
-
-        # SQLAlchemy 2.0 identity map currently masks the duplicates at the ORM layer
-        orm_results = search_songs("Triple Tagged")
-        assert len(orm_results) == 1, (
-            "ORM identity map collapses to 1 result — bug is masked but query is still wrong"
+        results = search_songs("Triple Tagged")
+        assert len(results) == 1, f"FIXED: got {len(results)} result(s), expected exactly 1"
+        assert set(results[0]["tags"]) == {"rock", "indie", "90s"}, (
+            "Tags are still returned correctly after removing the join"
         )
 
 

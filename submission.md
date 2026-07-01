@@ -67,23 +67,21 @@ Replaced the rolling `timedelta(hours=24)` cutoff with `now.replace(hour=0, minu
 
 ---
 
-### Bug 3 — Duplicate SQL rows in search (`search_service.py:26`)
+### Bug 3 — The same song keeps showing up twice in search (`search_service.py`)
 
-**Root cause:** The query joins on `song_tags` without `DISTINCT`:
-```python
-db.session.query(Song)
-    .outerjoin(song_tags, Song.id == song_tags.c.song_id)
-    .filter(...)
-    .all()
-```
-A song with N tags produces N SQL rows (one per tag join). SQLAlchemy 2.0's session identity map collapses these back to one ORM object before returning from `.all()`, so the bug is currently masked at the Python layer. However, the database does the extra work, and the query would produce visible duplicates if used with `select()` (SQLAlchemy 2.0 style) or outside a session context.
+**Issue:** Songs with multiple tags produce duplicate rows at the database level due to an unnecessary join, making the query fragile and wasteful.
 
-**How to reproduce (structural):**
-1. Create a song with 3 tags.
-2. Run the equivalent raw SQL directly: `SELECT song.id FROM song LEFT OUTER JOIN song_tags ON song.id = song_tags.song_id WHERE ...` → 3 rows returned.
-3. Verify ORM `.all()` collapses to 1 — the masked state.
+**How I reproduced it:**
+I created a song with 3 tags and ran the exact SQL that the service generates — a `LEFT OUTER JOIN` on `song_tags`. The raw query returned 3 rows, one per tag, for a single song. In the current setup SQLAlchemy 2.0's session identity map collapses those 3 rows back to 1 ORM object before Python sees them, so end users don't see visible duplicates today. But the database is doing 3× the work, and the same query written with SQLAlchemy's `select()` API (the 2.0-style) would return 3 duplicate dicts. The structural defect is confirmed.
 
-**Test:** `test_bug3_search_duplicate_sql_rows` — asserts `len(raw_rows) == 3` (database-level duplicate confirmed) and `len(orm_results) == 1` (ORM masks it today).
+**How I found the root cause:**
+I opened `services/search_service.py` and read `search_songs()`. The filter only references `Song.title` and `Song.artist` — both columns that live entirely on the `Song` table. There is no reason to touch `song_tags` at all for filtering. The `.outerjoin(song_tags, Song.id == song_tags.c.song_id)` on line 27 is joining a table that contributes nothing to the `WHERE` clause, which immediately told me it was the cause. Tags are already loaded by the `Song.tags` relationship defined in `models.py` as `lazy="subquery"`, so they come back automatically without any manual join.
+
+**Root cause:**
+`search_songs()` joined `song_tags` via `outerjoin` without any `DISTINCT` or `GROUP BY`. A song with N tags has N rows in `song_tags`, so the join multiplies the song's row N times in the result set — one row per tag. The join was never needed: the filter conditions (`title` and `artist`) are both on `Song` itself, and the tag data is already fetched automatically by the `lazy="subquery"` relationship on `Song.tags`. The join was purely accidental load — it added cost and risk with no benefit.
+
+**Fix and side-effect check:**
+Removed the `.outerjoin(song_tags, ...)` line entirely and cleaned up the now-unused `Tag` and `song_tags` imports. The query now reads directly from `Song` with no joins. Tags still appear correctly in each result dict because `Song.to_dict()` reads `self.tags`, which SQLAlchemy loads via the subquery relationship. All 5 search tests pass, tags are verified present in the reproduction test, and no other service calls `search_songs()`.
 
 ---
 
