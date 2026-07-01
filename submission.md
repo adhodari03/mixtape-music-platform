@@ -1,5 +1,23 @@
 # Mixtape — Technical Codebase Map & Bug Reproduction
 
+## AI Usage
+
+AI assistance (Claude) was used at three specific points in this process, always as a tool to sharpen work that was already underway rather than to replace independent analysis.
+
+**Bug reproduction and test writing**
+
+Once the root cause of each bug was identified, Claude was used to help write the reproduction tests in `tests/reproduce_all_bugs.py`. The test scenarios — the specific dates chosen for the streak and feed bugs, the 3-tag song for the search bug, the 5-song playlist — were designed collaboratively: I described the edge case I wanted to pin down, and Claude translated that into pytest fixtures and assertions. Claude also caught that Bug 3 (search duplicates) was being masked by SQLAlchemy's identity map and suggested probing the raw SQL directly to confirm the structural defect still existed at the database level, which led to a more honest reproduction test.
+
+**Root cause analysis**
+
+For Bugs 1 and 5, the root cause was immediately obvious from reading the code — a misplaced weekday guard and a `[:-1]` slice respectively. AI was not meaningfully involved there. For Bugs 2, 3, and 4, Claude was used to pressure-test the explanation: after I identified the suspicious line, I described my reasoning and Claude helped verify that no other code path could explain the same symptom. This was most useful for Bug 3, where the question of whether SQLAlchemy's identity map masked the duplicate rows required understanding the difference between `session.query()` and the newer `select()` API in SQLAlchemy 2.0.
+
+**What AI was not used for**
+
+AI did not navigate the codebase on my behalf or identify which files to look at. The flow of reading `models.py` first, then tracing each service, was done independently. AI was not used to write the fixes themselves — each change was written and verified manually before being committed.
+
+---
+
 ## Architecture Overview
 
 Mixtape is a Flask + SQLAlchemy 2.0 application (`app.py`) backed by SQLite. It has three layers:
