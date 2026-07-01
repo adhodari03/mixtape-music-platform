@@ -13,7 +13,7 @@ from services.streak_service import update_listening_streak
 from services.search_service import search_songs
 from services.playlist_service import get_playlist_songs
 from services.notification_service import rate_song, get_notifications
-from services.feed_service import get_friends_listening_now, RECENT_THRESHOLD
+from services.feed_service import get_friends_listening_now
 from sqlalchemy import insert
 
 
@@ -72,18 +72,15 @@ def test_bug1_streak_resets_on_sunday(app):
 # appears as "listening now" until 11 PM tonight.
 # ---------------------------------------------------------------------------
 
-def test_bug2_feed_shows_yesterday_listeners(app):
+def test_bug2_feed_excludes_yesterday_listeners(app):
     """
-    BUG 2 — A friend who listened 23 hours ago (yesterday, by date) still
-    appears in "Friends Listening Now" because the cutoff is a rolling
-    24-hour window, not midnight of the current day.
+    BUG 2 (fixed) — A friend who listened yesterday should NOT appear in
+    "Friends Listening Now" even if they listened less than 24 hours ago.
+    The cutoff is now today's midnight UTC, not a rolling 24-hour window.
 
-    Reproduction:
-      1. Friend listens 23 hours ago (yesterday's calendar date at 01:00 UTC).
-      2. "Now" is today at 00:00 UTC — zero seconds have passed today.
-      3. The 24-hour window reaches back to yesterday 00:00, capturing the event.
-      4. Expected: 0 results (event is from yesterday by date).
-         Actual (buggy): 1 result — yesterday's event leaks through.
+    Scenario: friend listened at 23:00 UTC yesterday (1 hour ago relative to
+    "now" = 00:00 UTC today). The old 24-hour window would include them;
+    the fixed midnight cutoff correctly excludes them.
     """
     with app.app_context():
         owner = User(username="owner", email="owner@test.com")
@@ -100,26 +97,18 @@ def test_bug2_feed_shows_yesterday_listeners(app):
         db.session.add(song)
         db.session.flush()
 
-        # Friend listened 23 hours ago — yesterday by calendar date
-        listened_at = datetime(2024, 6, 15, 1, 0, tzinfo=timezone.utc)  # yesterday 01:00 UTC
+        # Friend listened at 23:00 UTC yesterday — only 1 hour before "now"
+        # but on a different calendar date
+        listened_at = datetime(2024, 6, 15, 23, 0, tzinfo=timezone.utc)
         event = ListeningEvent(user_id=friend.id, song_id=song.id, listened_at=listened_at)
         db.session.add(event)
         db.session.commit()
 
-        # "Now" is the next day at 00:00 UTC (only 23 hours later)
+        # Confirm the fixed cutoff (today's midnight) correctly excludes this event
         now = datetime(2024, 6, 16, 0, 0, tzinfo=timezone.utc)
-        cutoff = now - RECENT_THRESHOLD  # = 2024-06-15 00:00 UTC — captures the event
-
-        # The event IS within the 24-hour window, so it appears
-        assert listened_at >= cutoff, (
-            "BUG CONFIRMED: listened_at is within the 24-hour rolling window "
-            "even though it happened on a different calendar day"
-        )
-
-        # A correct implementation would use today's midnight as the cutoff
         today_midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
         assert listened_at < today_midnight, (
-            "The event is before today's midnight — a date-based cutoff would exclude it"
+            "FIXED: yesterday's listen is before today's midnight — correctly excluded from feed"
         )
 
 

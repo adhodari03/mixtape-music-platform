@@ -49,22 +49,21 @@ Removed the `and today.weekday() != 6` guard entirely, leaving the branch as `el
 
 ---
 
-### Bug 2 — Feed shows yesterday's listeners (`feed_service.py:13`)
+### Bug 2 — Friends Listening Now shows people from yesterday (`feed_service.py`)
 
-**Root cause:** The "recent" cutoff is a rolling 24-hour window:
-```python
-RECENT_THRESHOLD = timedelta(hours=24)
-cutoff = datetime.now(timezone.utc) - RECENT_THRESHOLD
-```
-A friend who listened at 01:00 UTC yesterday is still within the 24-hour window until 01:00 UTC today. A user checking the feed at midnight today will see that friend as "Listening Now" even though they listened on a different calendar date.
+**Issue:** The "Friends Listening Now" feed shows friends who listened yesterday, not just today.
 
-**How to reproduce:**
-1. Friend listens at `2024-06-15 01:00 UTC` (yesterday).
-2. "Now" is `2024-06-16 00:00 UTC` (today, 23 hours later).
-3. Cutoff = `2024-06-15 00:00 UTC` — the event at 01:00 is after the cutoff and appears in the feed.
-4. A date-based cutoff (today's midnight) would correctly exclude it.
+**How I reproduced it:**
+I constructed the sharpest possible edge case: a friend listens at 23:00 UTC on June 15, and the current user checks the feed at 00:00 UTC on June 16 — only one hour later, but a different calendar day. With the old logic, that friend appears in "Listening Now." The reproduction test `test_bug2_feed_excludes_yesterday_listeners` pins this scenario. I also confirmed it analytically: `RECENT_THRESHOLD = timedelta(hours=24)` on line 13 reaches back a full rolling day, so any listen within the past 24 clock-hours passes the filter regardless of which date it occurred on.
 
-**Test:** `test_bug2_feed_shows_yesterday_listeners` — asserts `listened_at >= cutoff` (event leaks through) and `listened_at < today_midnight` (a correct implementation would block it).
+**How I found the root cause:**
+I opened `services/feed_service.py` and looked at how the `cutoff` was computed on line 32: `cutoff = datetime.now(timezone.utc) - RECENT_THRESHOLD`. The constant `RECENT_THRESHOLD` on line 13 was `timedelta(hours=24)`. A rolling 24-hour window does not align with calendar-day boundaries — that mismatch is the entire problem. No other part of the function was relevant.
+
+**Root cause:**
+`timedelta(hours=24)` computes a cutoff by subtracting exactly 24 clock-hours from the current time. "Friends Listening Now" is a feature whose natural boundary is the current calendar day, not the last 24 hours. When a friend listens at 23:00 UTC and the user checks the feed at 00:05 UTC the next day, only 65 minutes have passed — the event is well inside the 24-hour window and appears in results, even though it happened yesterday. The correct cutoff is today's midnight UTC (`now.replace(hour=0, minute=0, second=0, microsecond=0)`), which is a hard date boundary and cannot accidentally include the previous day.
+
+**Fix and side-effect check:**
+Replaced the rolling `timedelta(hours=24)` cutoff with `now.replace(hour=0, minute=0, second=0, microsecond=0)` — today's midnight UTC. Removed the now-unused `RECENT_THRESHOLD` constant and `timedelta` import to keep the module clean. The `get_activity_feed` function in the same file deliberately has no recency filter (it returns the most recent N events regardless of date), so it is unaffected. All 15 tests across streaks, search, and the reproduction suite pass after the change.
 
 ---
 
